@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <script src="https://pixijs.download/release/pixi.js"></script>
+    </head>
+    <body>
+        <script type="module">
+            /*  Some things to know before going on:
+                - PixiJS is an open source product hosted on GitHub, so you can browse the repo and submit/fix bugs as you wish.
+                - It's written in TypeScript, a JS variant that enables type-checking via a pre-compile step.
+                - PixiJS has a few major components:
+                    - The renderer, which is the core. It displays the scene graph and draws it to the screen using WebGPU or WebGL.
+                        - Objects are rendered from the root down. Each level, the current object is rendered, then its children are rendered in order of insertion, LIFO (ex. third-inserted, then second, then first).
+                        - You can reorder child objects using "setChildIndex()" and "addChildAt()".
+                        - Automatic sorting (i.e., display order from front to back) can be enabled using the "sortableChildren" option combined with setting each child's "zIndex", which is a CSS property.
+                    - Containers, which are main scene objects which create a scene graph, i.e., a tree of renderable objects to be displayed, whether that be sprites, graphics, or text.
+                        - The scene graph is a tree of objects, updated and rendered every frame.
+                        - It's rooted at a container maintained by the application, and referenced using "app.stage". Whenever a new renderable object is added as a child to the stage, it's added to the scene graph.
+                            - Containers can also have children, so as the scene grows more complex, the scene graph blossoms into a tree of parent-child relationships, rooted at the app's stage.
+                            - Anything you do to a parent object (i.e., a Container) is also done to its children. So, if you have a Sprite "A" with child Sprite "B", and Sprite "B" has child "C" attached, moving "A" 75 pixels right will also move "B" 75 pixels right, and that causes "C" to move 75 pixels right.
+                                - All updates to a child object's position that are caused by changing their parent's position happen relative to the parent.
+                                - An object's "worldTransform" property has its cumulative translation, rotation, scale, and skew.
+                                - An object's alpha (transparency) value is stored in the "worldAlpha" property. 
+                    - The Asset system, which provides tools for asynchronously loading resources like images or audio files.
+                    - Tickers, which provide periodic callbacks based on a clock. Usually logic will be run in response to a tick once per frame.
+                        - You can have multiple tickers in use at one time, to have different counters, for instance.
+                    - The Application, which is a simple helper that wraps the Loader, Ticker, and Renderer into a single, convenient, easy-to-use object.
+                    - Events, which are the same as in JS. They allow for clickable and hoverable objects among others.
+                    - Accessibility tools regarding the keyboard and screen-reader.
+                - RenderGroups are essentially containers that PixiJS treats as self-contained scene graphs. Scene parts that are assigned to a RenderGroup are managed together as a unit by PixiJS. This includes monitoring for changes and preparing render instructions, making it a powerful tool for optimization.
+                    - The main advantage is that certain calculations like transformations, tint, and alpha adjustments to be offloaded to the GPU. This leaves only movements and adjustments in the care of the CPU, making the app more performance-efficient.
+                    - The root element passed to the render function is actually automatically converted into a RenderGroup!
+                    - These are best left for content that doesn't change often, or are mostly static in scene graph structure, or for partitioning the scene into logical parts, like a game world and HUD.
+                    - Set a Container to be a RenderGroup by setting its "isRenderGroup" member to be true.
+                    - While these are powerful, using too many can degrade performance, and you usually won't need to use them at all. Consider which parts of your scene change together, and which parts remain static; this way, you can group them separately to lead to performance gains.
+                - Culling refers to evaluating if an object or its children are onscreen, and then turning off rendering for them if they're not onscreen. This prevents the renderer from rendering things that don't need to be, because you can't even see them.
+                    - PixiJS doesn't natively have support for viewport culling, but there are third party plugins that can help. Or, you can adjust objects to be renderable using the "renderable" property (true/false) and your ticker.
+                - Sprites show up in the top left corner by default. That corner is the "global" origin. If a sprite or other container is added as a child object, its coordinates are relative to its parent, and are called "local".
+                    - You can convert from local to global coordinates using "toGlobal(new Point(x, y))", where 'x' and 'y' are the target global coordinates.
+                    - There are also "screen"/"viewport" coordinates, which are relative to the top-left of the canvas element that PixiJS is rendering into. Things like the DOM and mouse click events work in that space, and for the most part, screen space = world space.
+                        - HOWEVER, if the rendered view is stretched to fill the screen, or rendered at a lower resolution and upscaled for speed's sake, the screen size of the canvas will change, but the underlying render view won't, causing a difference between world and screen coordinates. Be careful!
+                - Frame rates can be adjusted using the "minFPS" and "maxFPS" attributes in a Ticker to give PixiJS hints to the range of tick speeds you want to support. It's not guaranteed, but that's why you use "ticker.deltaTime" in ticker callbacks to scale animations to ensure smooth playback.
+                - Scalable Vector Graphics "SVGs" are 2D images that can be scaled without losing quality. They're written in XML, and use points and lines on a grid instead of a bitmap. PixiJS supports these, rendering them as a texture (rendered as a sprite) or a graphics object (rendered as vector geometry).
+                    - Loading SVGs as textures within Sprites is efficient, but doesn't retain their scalability.
+                    - Loading SVGs as textures alone allows for size control, but increases memory usage.
+                    - Textures can only be 4096x4096 px, by the way. Use Graphics to render SVGs as true SVGs, as shown here:
+                        - Use "Graphics().svg(<svg {height=h, width=w, xmlns="source.url/svg"} pathsHere... )" to directly draw the SVG, or load it in using Assets.load.
+                    - SVGs are best used for things that need to retain clean looks while being scaled, like game worlds that can be zoomed in on.
+            */
+
+            /* [][][] MISCELLANEOUS GLOBAL VARS [][][] */
+            var windowWidth = (window.innerWidth - 100);
+            var windowHeight = (window.innerHeight - 100);
+
+            /* [][][] APP INITIALIZATON [][][] */
+
+            // Application is a helper class that simplifies working with PixiJS. It creates the renderer, creates the stage, and starts a ticker for updating.
+            // In production, you'll likely move past using the presets under Application, and instead make your own utilities.
+            const app = new PIXI.Application();
+            // "init({x:a, y:b, ...})" initializes the Application instance with the given parameters.
+            // You use "await" to start the initiation when all APIs (namely, WebGPU) have loaded and completed their promises.
+            await app.init({ resizeTo: window})
+
+            // Remember to append to "document.body" instead of "document" alone.
+            document.body.appendChild(app.canvas);
+
+            /* [][][] CLASSES [][][] */
+
+            // Encompasses all characters, e.g., the player(s) and enemies.
+            class Entity
+            {
+                // TO DO: Add stats (health, ability, damage, strengths/weaknesses etc.), speeds and weights (for potential gravity features), name/ID, 
+                constructor()
+                {
+                    console.log("You need to do this lol");
+                }
+            }
+
+            /* [][][] SPRITE LOADING [][][] */
+
+            // One way to draw images in PixiJS is by using a "Sprite", which is a type of "Container". PixiJS renders a hierarchy of Containers, each with their own resources.
+            // In a Sprite's case, it wraps a loaded image resource to allow for drawing, scaling, rotating, etc.
+            // So, you first load in the Sprite into Assets...
+            await PIXI.Assets.load('sample.png');
+            // Then make a new Sprite object from that.
+            // P.S.: Use "let" over "var" when you can since "let" makes variables that are block-scope, rather than function-scope. This means "let"s run a lesser risk of having value shenanigans due to modification somewhere in its region (e.g., between {} as opposed to a whole function, or globally as with "var"s).
+            let spritz = PIXI.Sprite.from('sample.png');
+            spritz.anchor.set(0.5, 0.5);
+
+            // TO DO: Make rectangles that are some bounding object (e.g., Floors, Walls, Ceilings, Bounds) for Entities.
+            //        You may also want to add an airborne/grounded state attribute to Entities.
+            /* let walls = [
+                PIXI.
+            ] */
+
+            // Now the Sprite can be added using "app.stage.addChild(spriteName)".
+            app.stage.addChild(spritz);
+
+            /* [][][] KEYBOARD INPUTS [][][] */
+
+            let inputsHeld = new Set([]);
+            window.addEventListener('keydown', (event) => {
+                let retX = 0;
+                let retY = 0;
+                switch(event.code)
+                {
+                    case 'KeyW':
+                        console.log(spritz);
+                        retY -= 5;
+                        break;
+                    case 'KeyS':
+                        spritz.y +=  5;
+                        break;
+                    case 'KeyA':
+                        spritz.x -= 5;
+                        break;
+                    case 'KeyD':
+                        spritz.x += 5;
+                        break;
+                    case 'Space':
+                        spritz.rotation += Math.PI/50;
+                        break;
+                    default:
+                        console.log("No relevant key, sorry");
+                }
+                return [retX, retY];
+                //processInnerKey(event);
+            });
+
+            window.addEventListener("keyup", (event) =>
+            {
+                if(inputs.has(event.code))
+                {
+                    inputsHeld.delete(event.code);
+                }
+            })
+
+            // Moves a given Sprite using given x and y .
+            function moveSprite()
+            {
+
+            }
+
+            /* [][][] UPDATE LOOP INITIATLIZATION [][][] */
+
+            // This will be your second/tick counter, whose values will be updated using the app's ticker.
+            let elapsed = 0.0;
+
+            // This tells the app's ticker to run a new callback every frame.
+            // In other words, this is where you update your scene, telling the app what happens for each sprite or logic aspect, frame by frame.
+            spritz.x = Math.round(windowWidth / 2);
+            spritz.y = Math.round(windowHeight / 2);
+
+            app.ticker.add((ticker) =>
+            {
+                elapsed += ticker.deltaTime;
+                // Here's where you can update your sprites per frame.
+                // This example code sets the sprite from earlier to move in a figure-8.
+                
+                //sprite.x = 100.0 + Math.cos(elapsed/50.0) * 100.0;
+                //sprite.y = Math.sin(elapsed/25.0) * 50.0;
+
+                // Moves the sprite.
+
+                
+                if(Math.round(elapsed%500) == 0)
+                {
+                    console.log("Sprite is at " + spritz.position);
+                }
+            });
+        </script>
+    </body>
+</html>
